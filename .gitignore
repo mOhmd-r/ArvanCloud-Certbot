@@ -1,0 +1,14 @@
+# Local secrets and certificate material
+credentials
+*.credentials
+*.key
+*.pem
+.env
+
+# Legacy temporary hook/state files
+auth.sh
+last_txt_record_id.txt
+
+# Editor and OS noise
+.DS_Store
+*.swp
