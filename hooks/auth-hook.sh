@@ -71,6 +71,8 @@ record_id=$(jq -er '.data.id | strings | select(length > 0)' <<<"$response") ||
 arvan_validate_record_id "$record_id" ||
   arvan_die "ArvanCloud returned an unsafe record ID"
 
+# Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2317
 cleanup_failed_auth() {
   local status=$?
   if ((status != 0)) && [[ -n ${record_id:-} ]]; then
