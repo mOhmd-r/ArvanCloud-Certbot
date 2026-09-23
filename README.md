@@ -1,93 +1,141 @@
-# Certbot-ArvanCloud
+# Certbot with ArvanCloud DNS
 
-````markdown
-# Certbot + ArvanCloud DNS Hook
+Issue and automatically renew Let's Encrypt certificates through ArvanCloud's
+DNS API. The project installs persistent Certbot manual hooks and keeps the API
+authorization value in a root-owned `0600` file.
 
-This script automates issuing SSL certificates with **Certbot** using the **DNS-01 challenge** via **ArvanCloud DNS API**.  
+## Security model
 
----
+- The API key is never embedded in a hook or passed on the command line.
+- Hooks and credentials are installed under root-controlled paths.
+- The exact ArvanCloud zone is required; the script does not guess registrable
+  domains and therefore handles multi-label public suffixes such as `co.uk`.
+- JSON request and response data is built and validated with `jq`.
+- API calls have connection and total timeouts and treat HTTP errors as errors.
+- Failed authentication attempts remove any TXT record already created.
+- Certbot passes scoped cleanup metadata through `CERTBOT_AUTH_OUTPUT`, avoiding
+  predictable files in `/tmp`.
+- DNS propagation is confirmed against every authoritative name server.
 
 ## Requirements
 
-1. **ArvanCloud API Key**  
-   You need to generate an API Key from your ArvanCloud panel:  
-   👉 [Official ArvanCloud API Key Documentation](https://docs.arvancloud.ir/fa/developer-tools/api/api-key)
+Supported target: Ubuntu 24.04 LTS or another Linux distribution with:
 
-2. **Dependencies**
-   - `bash`
-   - `curl`
-   - `jq`
-   - `dig` (package `dnsutils`)
-   - `certbot`
+- Bash 4.4+
+- Certbot
+- curl 7.76+ (`--fail-with-body`)
+- jq
+- `dig`
+- GNU `install` and `stat`
+- root access
 
-3. Access to a server where your domain (or subdomain) is pointing.
-
----
-
-## How It Works
-
-1. The script securely prompts you for the **ArvanCloud API Key**.  
-2. A temporary hook script (`auth.sh`) is created as a **Certbot manual-auth-hook**:
-   - It creates the required `_acme-challenge` TXT record via ArvanCloud API.
-   - Waits until the DNS record is propagated.  
-3. Certbot uses the TXT record to validate the domain and issue the SSL certificate.  
-4. After successful issuance:
-   - The temporary TXT record is **removed** from ArvanCloud DNS.  
-   - The temporary hook script is deleted.  
-
----
-
-## Usage
-
-Run the script with your domain or subdomain as an argument:
+On Ubuntu:
 
 ```bash
-./certbot-arvan.sh <domain_or_subdomain>
-````
-
-### Examples
-
-Request certificate for the root domain:
-
-```bash
-./certbot-arvan.sh example.com
+sudo apt-get update
+sudo apt-get install --yes certbot curl jq dnsutils
 ```
 
-Request certificate for a subdomain:
+Create an ArvanCloud API key with only the permissions and zones required for
+DNS record management. Treat the complete value used in the HTTP
+`Authorization` header as a password.
+
+## Issue a certificate
 
 ```bash
-./certbot-arvan.sh app.example.com
+git clone https://github.com/mOhmd-r/ArvanCloud-Certbot.git
+cd ArvanCloud-Certbot
+chmod +x certbot-arvan.sh hooks/*.sh tests/run.sh
+
+sudo ./certbot-arvan.sh \
+  --email sre@example.com \
+  --zone example.com \
+  -d example.com \
+  -d '*.example.com'
 ```
 
----
+The API authorization value is requested without terminal echo on the first
+run. It is installed at:
 
-## Output
+```text
+/etc/letsencrypt/arvancloud/credentials
+```
 
-* Certificates are stored in the default Certbot location:
+Expected format:
 
-  ```
-  /etc/letsencrypt/live/<domain>/
-  ```
-* Temporary TXT records are removed after validation.
-* On success, you will see:
+```ini
+ARVANCLOUD_API_KEY=Apikey replace-with-your-key
+```
 
-  ```
-  ✅ Done! Certificate issued and TXT record removed.
-  ```
+You may prepare that file elsewhere and import it:
 
----
+```bash
+sudo ./certbot-arvan.sh \
+  --email sre@example.com \
+  --zone example.com \
+  --credentials-file /root/arvancloud.credentials \
+  -d example.com
+```
 
-## Notes
+The source must be a regular file, not a symlink. The installed copy is always
+owned by root with mode `0600`.
 
-* The TXT record TTL is set to **120 seconds**.
-* The script waits up to **120 seconds** (12 × 10s retries) for DNS propagation.
-* If DNS propagation takes longer, the process will fail.
+## Renewal
 
----
+The absolute auth and cleanup hook commands are stored by Certbot in the
+certificate's renewal configuration. Test them immediately:
 
-## Temporary Files
+```bash
+sudo certbot renew --dry-run
+```
 
-* `/tmp/last_txt_record_id.txt`
-  Stores the record ID of the created TXT entry, used for cleanup.
+Inspect the saved configuration without exposing the credentials:
 
----
+```bash
+sudo certbot certificates
+sudo grep -E '^(authenticator|manual_auth_hook|manual_cleanup_hook)' \
+  /etc/letsencrypt/renewal/*.conf
+```
+
+Do not remove `/usr/local/libexec/certbot-arvancloud` or
+`/etc/letsencrypt/arvancloud/credentials` while certificates depend on these
+hooks.
+
+## Staging
+
+Use Let's Encrypt staging while testing to avoid production rate limits:
+
+```bash
+sudo ./certbot-arvan.sh \
+  --staging \
+  --email sre@example.com \
+  --zone example.com \
+  -d example.com
+```
+
+Staging certificates are not trusted by browsers.
+
+## Limitations
+
+- The challenge name must be hosted directly in the configured ArvanCloud zone.
+  CNAME-delegated `_acme-challenge` records are not handled.
+- Internationalized domains must be supplied in ASCII/Punycode form.
+- One invocation operates on identifiers inside one ArvanCloud zone.
+- The hook deliberately does not retry mutating API requests automatically;
+  blind retries can create duplicate TXT records after ambiguous timeouts.
+
+## Development
+
+Run local checks:
+
+```bash
+bash -n certbot-arvan.sh hooks/*.sh tests/run.sh
+shellcheck -x certbot-arvan.sh hooks/*.sh tests/run.sh
+bash tests/run.sh
+```
+
+Tests use mocked network commands and never contact ArvanCloud or Let's Encrypt.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
